@@ -1,0 +1,13 @@
+torch==1.12.1
+torchvision==0.13.1
+torchaudio==0.12.1
+einops
+librosa
+matplotlib
+numpy
+soundfile
+tqdm
+p_tqdm
+wandb
+scipy
+accelerate

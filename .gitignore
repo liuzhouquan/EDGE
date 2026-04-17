@@ -1,3 +1,5 @@
+data/
+dataset/
 train/
 test/
 edge_aistpp/
@@ -15,3 +17,4 @@ __pycache__/
 *.zip
 cached_features/
 custom_music/
+prompt.txt
