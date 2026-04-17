@@ -156,12 +156,13 @@ class EDGE:
         # data loaders
         # decide number of workers based on cpu count
         num_cpus = multiprocessing.cpu_count()
+        pin = torch.cuda.is_available()
         train_data_loader = DataLoader(
             train_dataset,
             batch_size=opt.batch_size,
             shuffle=True,
             num_workers=min(int(num_cpus * 0.75), 32),
-            pin_memory=True,
+            pin_memory=pin,
             drop_last=True,
         )
         test_data_loader = DataLoader(
@@ -169,7 +170,7 @@ class EDGE:
             batch_size=opt.batch_size,
             shuffle=True,
             num_workers=2,
-            pin_memory=True,
+            pin_memory=pin,
             drop_last=True,
         )
 

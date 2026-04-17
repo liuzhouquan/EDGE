@@ -118,7 +118,8 @@ def test(opt):
             data_tuple, "test", opt.render_dir, render_count=-1, fk_out=fk_out, render=not opt.no_render
         )
     print("Done")
-    torch.cuda.empty_cache()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     for temp_dir in temp_dir_list:
         temp_dir.cleanup()
 
