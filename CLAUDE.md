@@ -6,18 +6,30 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 EDGE (Editable Dance Generation From Music) is a PyTorch implementation of a diffusion-based model for generating physically-plausible, music-synchronized dance motions (CVPR 2023).
 
-## Setup
+**Current development goal:** Extend the model to support **duet/reactive dance generation** — changing the conditioning input from music features alone to (lead dancer motion + music features), so the model learns to generate a follower's motion that is both music-synchronized and responsive to a lead dancer.
+
+## Environment
+
+**Target platform:** Linux x86_64 with NVIDIA GPU, Slurm job scheduler.
 
 ```bash
-pip install -r requirements.txt
-accelerate config          # configure fp16 / multi-GPU settings
-bash download_model.sh     # download pretrained checkpoint from Google Drive
+conda env create -f environment-linux.yml
+conda activate edge
+# then manually install pytorch3d:
+pip install pytorch3d \
+  --extra-index-url https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu118_pyt210/download.html
+accelerate config          # configure fp16 / single-GPU
+bash download_model.sh     # download pretrained checkpoint
 ```
+
+See `TODOLIST.md` for the full reproduction checklist, and `RunInML.md` for Slurm job submission instructions.
 
 ## Common Commands
 
-**Train:**
+**Train (submit via Slurm):**
 ```bash
+sbatch run_training.sh
+# or directly:
 accelerate launch train.py --batch_size 128 --epochs 2000 --feature_type jukebox --learning_rate 0.0002
 ```
 
@@ -31,12 +43,11 @@ python test.py --music_dir custom_music/
 python eval/eval_pfc.py --motion_path eval/motions/
 ```
 
-**Convert SMPL output to FBX (requires Blender):**
+**Monitor job:**
 ```bash
-python SMPL-to-FBX/Convert.py --input_dir SMPL-to-FBX/smpl_samples/ --output_dir SMPL-to-FBX/fbx_out
+squeue -u $USER
+tail -f logs/train-output.log
 ```
-
-There is no unit test suite — interactive testing is done via `demo.ipynb`.
 
 ## Architecture
 
@@ -52,12 +63,19 @@ There is no unit test suite — interactive testing is done via `demo.ipynb`.
 
 - **`vis.py`** — `SMPLSkeleton`: 24-joint SMPL kinematic tree, forward kinematics, foot contact detection (joint indices 7, 8, 10, 11). Also handles matplotlib animation and ffmpeg video rendering.
 
-**Data flow:**
+**Current data flow:**
 ```
 music file → feature extraction (Jukebox 4800-dim or baseline 35-dim)
-          → DanceDecoder (denoising transformer)
-          → GaussianDiffusion (DDIM sampler)
-          → SMPLSkeleton FK → rendered video
+           → DanceDecoder (cross-attention to music embeddings)
+           → GaussianDiffusion (DDIM sampler)
+           → SMPLSkeleton FK → rendered video
+```
+
+**Planned data flow (duet extension):**
+```
+lead motion (151-dim) + music features (4800-dim)
+  → concatenate or dual cross-attention → cond (4951-dim)
+  → DanceDecoder → follower motion
 ```
 
 ## Key Conventions
@@ -75,3 +93,5 @@ music file → feature extraction (Jukebox 4800-dim or baseline 35-dim)
 **Audio filenames:** Must be simple (e.g., `song.wav`, not filenames with spaces/special chars). Slices are named `songname_slice{N}.wav` and sorted numerically.
 
 **Normalizer:** Motion statistics (mean/std) are computed from the training set and stored in checkpoints — apply consistently across splits.
+
+**Device compatibility:** `pin_memory` in DataLoader is enabled only when CUDA is available. `torch.cuda.empty_cache()` is guarded by `is_available()`.
