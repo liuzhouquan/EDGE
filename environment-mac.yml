@@ -1,0 +1,33 @@
+name: edge-mac
+# macOS Apple Silicon (arm64) — CPU/MPS only, no CUDA
+# Install: conda env create -f environment-mac.yml
+# pytorch3d requires Xcode CLT: xcode-select --install
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  # PyTorch 2.1 — arm64 wheel, supports MPS (Apple GPU) and CPU
+  - pytorch::pytorch=2.1.2
+  - pytorch::torchvision=0.16.2
+  - pytorch::torchaudio=2.1.2
+  - numpy<2.0
+  - scipy
+  - matplotlib
+  - tqdm
+  - pip:
+      - einops
+      - librosa
+      - soundfile
+      - p_tqdm
+      # wandb — disable offline: set WANDB_MODE=offline to avoid network auth during smoke tests
+      - wandb
+      # accelerate — CPU/single-process mode works out of the box
+      - "accelerate>=0.24,<1.0"
+      # pytorch3d: no conda binary for arm64; compile from source (needs Xcode CLT)
+      # If compilation fails, see CHANGES.md for the pytorch3d-stub workaround.
+      - "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.5"
+      # jukemirlib is NOT installed on macOS — use --feature_type baseline instead.
+      # (Jukebox model requires ~10 GB download and GPU for reasonable speed.)

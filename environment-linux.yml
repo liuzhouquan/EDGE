@@ -1,0 +1,37 @@
+name: edge-linux
+# RedHat 9.7 x86_64 with NVIDIA GPU — CUDA 11.8 build
+# Install: conda env create -f environment-linux.yml
+# After creation, activate and install pytorch3d:
+#   pip install "pytorch3d" --extra-index-url \
+#     https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu118_pyt210/download.html
+# Or compile from source:
+#   pip install "git+https://github.com/facebookresearch/pytorch3d.git@v0.7.5"
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pytorch::pytorch=2.1.2
+  - pytorch::torchvision=0.16.2
+  - pytorch::torchaudio=2.1.2
+  - pytorch::pytorch-cuda=11.8
+  - numpy<2.0
+  - scipy
+  - matplotlib
+  - tqdm
+  # fvcore / iopath are pytorch3d build dependencies available on conda-forge
+  - conda-forge::fvcore
+  - conda-forge::iopath
+  - pip:
+      - einops
+      - librosa
+      - soundfile
+      - p_tqdm
+      - wandb
+      - "accelerate>=0.24,<1.0"
+      - jukemirlib
+      # pytorch3d: install manually after env creation (see header comment above).
+      # The prebuilt wheel URL is for py310 + cu118 + pytorch 2.1.0.
