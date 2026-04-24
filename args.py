@@ -50,6 +50,14 @@ def parse_train_opt():
         "--duet", action="store_true",
         help="双人舞模式：输入=主舞动作+音乐，输出=伴舞动作（需配合 DuetDataset 训练的 checkpoint）",
     )
+    parser.add_argument(
+        "--music_drop_prob", type=float, default=0.1,
+        help=(
+            "仅双人模式有效。训练时随机将音乐特征置零的概率，"
+            "使模型学会仅凭主舞动作生成伴舞（支持无音乐推理）。"
+            "0 = 不丢弃；建议值 0.1~0.2。"
+        ),
+    )
     opt = parser.parse_args()
     return opt
 
@@ -118,6 +126,13 @@ def parse_test_opt():
         help=(
             "主舞动作的预处理切片目录（每个 .pkl 含 pos[300,3] 和 q[300,72]，60fps）。"
             "不提供时退化为原始单人生成模式（需要用单人 checkpoint）。"
+        ),
+    )
+    parser.add_argument(
+        "--no_music", action="store_true",
+        help=(
+            "仅双人模式有效。推理时将音乐特征置零，仅凭主舞动作生成伴舞。"
+            "需要模型训练时使用了 --music_drop_prob > 0（否则效果差）。"
         ),
     )
     opt = parser.parse_args()

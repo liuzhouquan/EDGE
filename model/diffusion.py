@@ -539,6 +539,25 @@ class GaussianDiffusion(nn.Module):
         t = torch.full((batch_size,), timestep, device=x.device).long()
         return self.q_sample(x, t) if timestep > 0 else x
 
+    def _cond_to_lead_poses(self, cond, normalizer, repr_dim=151):
+        """Extract and FK the lead dancer poses embedded in the first repr_dim
+        dims of a duet conditioning tensor.
+
+        cond : [B, T, feature_dim]  where feature_dim = repr_dim + music_dim
+        Returns [B, T, 24, 3] world-space joint positions, or None if cond has
+        no room for a lead pose (e.g. solo mode).
+        """
+        if cond.shape[-1] <= repr_dim:
+            return None
+        lead_norm = cond[:, :, :repr_dim].float()          # [B, T, 151]
+        lead = normalizer.unnormalize(lead_norm.cpu())      # [B, T, 151]
+        _, lead = torch.split(lead, (4, repr_dim - 4), dim=2)  # drop contacts
+        b, s, _ = lead.shape
+        pos = lead[:, :, :3].to(cond.device)
+        q   = lead[:, :, 3:].reshape(b, s, 24, 6)
+        q   = ax_from_6v(q).to(cond.device)
+        return self.smpl.forward(q, pos).detach().cpu().numpy()  # [B, T, 24, 3]
+
     def render_sample(
         self,
         shape,
@@ -554,7 +573,9 @@ class GaussianDiffusion(nn.Module):
         constraint=None,
         sound_folder="ood_sliced",
         start_point=None,
-        render=True
+        render=True,
+        duet=False,          # when True, extract lead pose from cond and render alongside
+        repr_dim=151,        # motion representation dimension (used to split cond)
     ):
         if isinstance(shape, tuple):
             if mode == "inpaint":
@@ -649,7 +670,35 @@ class GaussianDiffusion(nn.Module):
             full_pose = (
                 self.smpl.forward(full_q, full_pos).detach().cpu().numpy()
             )  # b, s, 24, 3
-            # squeeze the batch dimension away and render
+
+            # In duet mode: extract and stitch lead poses for overlay rendering
+            lead_pose_render = None
+            if duet:
+                lead_poses_all = self._cond_to_lead_poses(cond, normalizer, repr_dim)
+                if lead_poses_all is not None:
+                    # lead_poses_all is [N_chunks, T, 24, 3]; stitch like follower
+                    lp = torch.tensor(lead_poses_all)  # reuse positional stitching logic
+                    full_lead = np.zeros_like(full_pose[0])  # [full_T, 24, 3]
+                    chunk_len = lead_poses_all.shape[1]
+                    half_c = chunk_len // 2
+                    n_chunks = lead_poses_all.shape[0]
+                    total_len = chunk_len + half_c * (n_chunks - 1)
+                    full_lead = np.zeros((total_len, 24, 3))
+                    idx = 0
+                    for ci, lchunk in enumerate(lead_poses_all):
+                        sl = slice(idx, idx + chunk_len)
+                        if ci == 0:
+                            full_lead[sl] = lchunk
+                        else:
+                            # simple linear blend in the overlap
+                            w = np.linspace(0, 1, half_c)[:, None, None]
+                            full_lead[idx:idx + half_c] = (
+                                (1 - w) * full_lead[idx:idx + half_c] + w * lchunk[:half_c]
+                            )
+                            full_lead[idx + half_c:idx + chunk_len] = lchunk[half_c:]
+                        idx += half_c
+                    lead_pose_render = full_lead
+
             skeleton_render(
                 full_pose[0],
                 epoch=f"{epoch}",
@@ -658,7 +707,8 @@ class GaussianDiffusion(nn.Module):
                 sound=sound,
                 stitch=True,
                 sound_folder=sound_folder,
-                render=render
+                render=render,
+                poses_lead=lead_pose_render,
             )
             if fk_out is not None:
                 outname = f'{epoch}_{"_".join(os.path.splitext(os.path.basename(name[0]))[0].split("_")[:-1])}.pkl'
@@ -680,6 +730,8 @@ class GaussianDiffusion(nn.Module):
             else None
         )
 
+        lead_poses_batch = self._cond_to_lead_poses(cond, normalizer, repr_dim) if duet else None
+
         def inner(xx):
             num, pose = xx
             filename = name[num] if name is not None else None
@@ -691,6 +743,7 @@ class GaussianDiffusion(nn.Module):
                 name=filename,
                 sound=sound,
                 contact=contact,
+                poses_lead=lead_poses_batch[num] if lead_poses_batch is not None else None,
             )
 
         p_map(inner, enumerate(poses))

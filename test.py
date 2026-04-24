@@ -148,12 +148,20 @@ def test(opt):
         music_cond = all_cond[i]  # [N_chunks, 150, music_feature_dim]
 
         if lead_motion_chunks is not None:
-            # 双人舞模式：cond = cat([主舞动作, 音乐特征], dim=-1)
+            # 双人舞模式：cond = cat([主舞动作(151), 音乐特征], dim=-1)
             # → [N_chunks, 150, 151 + music_feature_dim]
-            # 和训练时 DuetDataset.__getitem__ 里的拼接顺序完全一致
-            cond = torch.cat(
-                [lead_motion_chunks.to(music_cond.dtype), music_cond], dim=-1
-            )
+            # 与训练时 DuetDataset.__getitem__ 拼接顺序完全一致
+            if opt.no_music:
+                # 无音乐模式：音乐特征置零，模型仅凭主舞动作生成伴舞
+                # 需要训练时用过 --music_drop_prob > 0，否则生成质量较差
+                music_zeros = torch.zeros_like(music_cond)
+                cond = torch.cat(
+                    [lead_motion_chunks.to(music_zeros.dtype), music_zeros], dim=-1
+                )
+            else:
+                cond = torch.cat(
+                    [lead_motion_chunks.to(music_cond.dtype), music_cond], dim=-1
+                )
         else:
             # 单人模式（兼容原始 checkpoint）
             cond = music_cond

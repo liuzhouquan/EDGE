@@ -229,6 +229,15 @@ class EDGE:
             for step, (x, cond, filename, wavnames) in enumerate(
                 load_loop(train_data_loader)
             ):
+                # Music dropout: randomly zero the music portion of the duet
+                # conditioning so the model learns to generate from lead motion
+                # alone (enables --no_music at inference time).
+                if self.duet and opt.music_drop_prob > 0:
+                    mask = (torch.rand(cond.shape[0], 1, 1, device=cond.device)
+                            > opt.music_drop_prob)
+                    cond = cond.clone()
+                    cond[:, :, self.repr_dim:] *= mask
+
                 total_loss, (loss, v_loss, fk_loss, foot_loss) = self.diffusion(
                     x, cond, t_override=None
                 )
@@ -291,6 +300,8 @@ class EDGE:
                         os.path.join(opt.render_dir, "train_" + opt.exp_name),
                         name=wavnames[:render_count],
                         sound=True,
+                        duet=self.duet,
+                        repr_dim=self.repr_dim,
                     )
                     print(f"[MODEL SAVED at Epoch {epoch}]")
                     self.train()
@@ -333,5 +344,7 @@ class EDGE:
             sound=True,
             mode="long",
             fk_out=fk_out,
-            render=render
+            render=render,
+            duet=self.duet,
+            repr_dim=self.repr_dim,
         )

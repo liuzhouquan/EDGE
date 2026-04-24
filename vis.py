@@ -159,6 +159,44 @@ def plot_single_pose(num, poses, lines, ax, axrange, scat, contact):
         ax.set_zlim(z_min, z_max)
 
 
+def _draw_skeleton_lines(ax, color):
+    """Create one set of skeleton line artists on the given axes."""
+    lines = [
+        ax.plot([], [], [], zorder=10, linewidth=1.5, color=color)[0]
+        for _ in smpl_parents
+    ]
+    scat = [
+        ax.scatter([], [], [], zorder=10, s=0)
+        for _ in range(4)
+    ]
+    return lines, scat
+
+
+def _update_skeleton(num, poses, lines, scat, contact):
+    """Update one skeleton's line artists for frame `num`."""
+    pose = poses[num]
+    static = contact[num]
+    indices = [7, 8, 10, 11]
+    for i, (point, idx) in enumerate(zip(scat, indices)):
+        position = pose[idx : idx + 1]
+        color = "r" if static[i] else "g"
+        set_scatter_data_3d(point, position, color)
+    for i, (p, line) in enumerate(zip(smpl_parents, lines)):
+        if i == 0:
+            continue
+        data = np.stack((pose[i], pose[p]), axis=0)
+        set_line_data_3d(line, data)
+
+
+def _contact_mask(poses, contact_labels=None):
+    feet = poses[:, (7, 8, 10, 11)]
+    feetv = np.zeros(feet.shape[:2])
+    feetv[:-1] = np.linalg.norm(feet[1:] - feet[:-1], axis=-1)
+    if contact_labels is None:
+        return feetv < 0.01
+    return contact_labels > 0.95
+
+
 def skeleton_render(
     poses,
     epoch=0,
@@ -168,50 +206,50 @@ def skeleton_render(
     stitch=False,
     sound_folder="ood_sliced",
     contact=None,
-    render=True
+    render=True,
+    poses_lead=None,          # optional lead dancer [T, 24, 3] — shown in a second colour
+    color_follower="tomato",  # colour for the main (generated) dancer
+    color_lead="royalblue",   # colour for the lead dancer overlay
 ):
     if render:
-        # generate the pose with FK
         Path(out).mkdir(parents=True, exist_ok=True)
         num_steps = poses.shape[0]
-        
+
         fig = plt.figure()
         ax = fig.add_subplot(projection="3d")
-        
+
         point = np.array([0, 0, 1])
         normal = np.array([0, 0, 1])
         d = -point.dot(normal)
         xx, yy = np.meshgrid(np.linspace(-1.5, 1.5, 2), np.linspace(-1.5, 1.5, 2))
         z = (-normal[0] * xx - normal[1] * yy - d) * 1.0 / normal[2]
-        # plot the plane
         ax.plot_surface(xx, yy, z, zorder=-11, cmap=cm.twilight)
-        # Create lines initially without data
-        lines = [
-            ax.plot([], [], [], zorder=10, linewidth=1.5)[0]
-            for _ in smpl_parents
-        ]
-        scat = [
-            ax.scatter([], [], [], zorder=10, s=0, cmap=ListedColormap(["r", "g", "b"]))
-            for _ in range(4)
-        ]
+
+        # Follower skeleton (always present)
+        lines_f, scat_f = _draw_skeleton_lines(ax, color_follower)
+        contact_f = _contact_mask(poses, contact)
+
+        # Lead skeleton (duet mode only)
+        if poses_lead is not None:
+            lines_l, scat_l = _draw_skeleton_lines(ax, color_lead)
+            contact_l = _contact_mask(poses_lead)
+
         axrange = 3
 
-        # create contact labels
-        feet = poses[:, (7, 8, 10, 11)]
-        feetv = np.zeros(feet.shape[:2])
-        feetv[:-1] = np.linalg.norm(feet[1:] - feet[:-1], axis=-1)
-        if contact is None:
-            contact = feetv < 0.01
-        else:
-            contact = contact > 0.95
+        def animate(num):
+            # update axis range on first frame
+            if num == 0:
+                xcenter, ycenter, zcenter = 0, 0, 2.5
+                step = axrange / 2
+                ax.set_xlim(xcenter - step, xcenter + step)
+                ax.set_ylim(ycenter - step, ycenter + step)
+                ax.set_zlim(zcenter - step, zcenter + step)
+            _update_skeleton(num, poses, lines_f, scat_f, contact_f)
+            if poses_lead is not None:
+                _update_skeleton(num, poses_lead, lines_l, scat_l, contact_l)
 
-        # Creating the Animation object
         anim = animation.FuncAnimation(
-            fig,
-            plot_single_pose,
-            num_steps,
-            fargs=(poses, lines, ax, axrange, scat, contact),
-            interval=1000 // 30,
+            fig, animate, num_steps, interval=1000 // 30,
         )
     if sound:
         # make a temporary directory to save the intermediate gif in
