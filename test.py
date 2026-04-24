@@ -1,5 +1,6 @@
 import glob
 import os
+import pickle
 from functools import cmp_to_key
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -15,6 +16,7 @@ from data.slice import slice_audio
 from EDGE import EDGE
 from data.audio_extraction.baseline_features import extract as baseline_extract
 from data.audio_extraction.jukebox_features import extract as juke_extract
+from dataset.dance_dataset import preprocess_motion_to_tensor
 
 # sort filenames that look like songname_slice{number}.ext
 key_func = lambda x: int(os.path.splitext(x)[0].split("_")[-1].split("slice")[-1])
@@ -41,6 +43,36 @@ def test(opt):
     feature_func = juke_extract if opt.feature_type == "jukebox" else baseline_extract
     sample_length = opt.out_length
     sample_size = int(sample_length / 2.5) - 1
+
+    # ---- 加载主舞动作切片（仅双人舞模式）----
+    # --duet 未指定时完全跳过，使用原始单人逻辑（兼容预训练 checkpoint）。
+    lead_motion_chunks = None
+    if opt.duet and opt.lead_motion_dir:
+        # 从 checkpoint 里取出归一化器，和训练时完全一致
+        ckpt = torch.load(opt.checkpoint, map_location="cpu")
+        normalizer = ckpt["normalizer"]
+
+        # 按 slice 编号排序加载所有主舞切片
+        lead_files = sorted(
+            glob.glob(os.path.join(opt.lead_motion_dir, "*.pkl")),
+            key=stringintkey,
+        )
+        if len(lead_files) < sample_size:
+            raise ValueError(
+                f"主舞目录只有 {len(lead_files)} 个切片，"
+                f"但生成 {opt.out_length}s 需要 {sample_size} 个。"
+                f"请提供更多切片或缩短 --out_length。"
+            )
+
+        print(f"Loading lead motion from {opt.lead_motion_dir} ({len(lead_files)} slices)")
+        processed = []
+        for f in lead_files[:sample_size]:
+            data = pickle.load(open(f, "rb"))
+            # 每个 pkl 包含 pos[T_raw,3] 和 q[T_raw,72]（60fps 原始帧率）
+            tensor = preprocess_motion_to_tensor(data["pos"], data["q"], normalizer)
+            processed.append(tensor)
+        # [sample_size, 150, 151]
+        lead_motion_chunks = torch.stack(processed)
 
     temp_dir_list = []
     all_cond = []
@@ -103,7 +135,7 @@ def test(opt):
             all_cond.append(cond_list)
             all_filenames.append(file_list[rand_idx : rand_idx + sample_size])
 
-    model = EDGE(opt.feature_type, opt.checkpoint)
+    model = EDGE(opt.feature_type, opt.checkpoint, duet=opt.duet)
     model.eval()
 
     # directory for optionally saving the dances for eval
@@ -113,7 +145,20 @@ def test(opt):
 
     print("Generating dances")
     for i in range(len(all_cond)):
-        data_tuple = None, all_cond[i], all_filenames[i]
+        music_cond = all_cond[i]  # [N_chunks, 150, music_feature_dim]
+
+        if lead_motion_chunks is not None:
+            # 双人舞模式：cond = cat([主舞动作, 音乐特征], dim=-1)
+            # → [N_chunks, 150, 151 + music_feature_dim]
+            # 和训练时 DuetDataset.__getitem__ 里的拼接顺序完全一致
+            cond = torch.cat(
+                [lead_motion_chunks.to(music_cond.dtype), music_cond], dim=-1
+            )
+        else:
+            # 单人模式（兼容原始 checkpoint）
+            cond = music_cond
+
+        data_tuple = None, cond, all_filenames[i]
         model.render_sample(
             data_tuple, "test", opt.render_dir, render_count=-1, fk_out=fk_out, render=not opt.no_render
         )

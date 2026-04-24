@@ -33,11 +33,22 @@ def parse_train_opt():
         "--save_interval",
         type=int,
         default=100,
-        help='Log model after every "save_period" epoch',
+        help="Save a numbered checkpoint every N epochs (e.g. train-100.pt, train-200.pt)",
+    )
+    parser.add_argument(
+        "--save_latest_interval",
+        type=int,
+        default=10,
+        help="Overwrite latest.pt every N epochs — limits loss to N epochs if job is preempted",
     )
     parser.add_argument("--ema_interval", type=int, default=1, help="ema every x steps")
     parser.add_argument(
-        "--checkpoint", type=str, default="", help="trained checkpoint path (optional)"
+        "--checkpoint", type=str, default="",
+        help="Checkpoint path to load. For training, resumes from the saved epoch automatically.",
+    )
+    parser.add_argument(
+        "--duet", action="store_true",
+        help="双人舞模式：输入=主舞动作+音乐，输出=伴舞动作（需配合 DuetDataset 训练的 checkpoint）",
     )
     opt = parser.parse_args()
     return opt
@@ -94,6 +105,20 @@ def parse_test_opt():
         type=str,
         default="cached_features/",
         help="Where to save/load the features",
+    )
+    # ---- 双人舞推理参数 ----
+    parser.add_argument(
+        "--duet", action="store_true",
+        help="双人舞模式：需提供 --lead_motion_dir，使用双人 checkpoint",
+    )
+    parser.add_argument(
+        "--lead_motion_dir",
+        type=str,
+        default="",
+        help=(
+            "主舞动作的预处理切片目录（每个 .pkl 含 pos[300,3] 和 q[300,72]，60fps）。"
+            "不提供时退化为原始单人生成模式（需要用单人 checkpoint）。"
+        ),
     )
     opt = parser.parse_args()
     return opt

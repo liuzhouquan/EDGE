@@ -3,7 +3,7 @@ from EDGE import EDGE
 
 
 def train(opt):
-    model = EDGE(opt.feature_type, learning_rate=opt.learning_rate)
+    model = EDGE(opt.feature_type, learning_rate=opt.learning_rate, duet=opt.duet)
     model.train_loop(opt)
 
 

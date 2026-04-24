@@ -1,5 +1,18 @@
-data/
-dataset/
+# ── 大文件 / 二进制数据（不进 git）────────────────────────────────────────
+*.pkl
+*.pt
+*.npy
+*.zip
+*.gif
+*.mp4
+*.wav
+
+# ── 生成的数据目录（不进 git）──────────────────────────────────────────────
+data/edge_aistpp/
+data/train/
+data/test/
+data/val/
+data/dataset_backups/
 train/
 test/
 edge_aistpp/
@@ -7,14 +20,12 @@ dataset_backups/
 runs/
 wandb/
 renders/
-.ipynb_checkpoints/
-__pycache__/
-*.gif
-*.mp4
-*.pkl
-*.pt
-*.npy
-*.zip
 cached_features/
 custom_music/
+
+# ── Python 缓存 ──────────────────────────────────────────────────────────
+__pycache__/
+.ipynb_checkpoints/
 prompt.txt
+
+# ── 注意：data/*.py、data/splits/*.txt、dataset/*.py 都进 git ──────────────

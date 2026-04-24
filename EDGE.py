@@ -12,7 +12,7 @@ from accelerate.state import AcceleratorState
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset.dance_dataset import AISTPPDataset
+from dataset.dance_dataset import AISTPPDataset, DuetDataset
 from dataset.preprocess import increment_path
 from model.adan import Adan
 from model.diffusion import GaussianDiffusion
@@ -37,6 +37,7 @@ class EDGE:
         EMA=True,
         learning_rate=4e-4,
         weight_decay=0.02,
+        duet=False,
     ):
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
@@ -47,8 +48,16 @@ class EDGE:
         pos_dim = 3
         rot_dim = 24 * 6  # 24 joints, 6dof
         self.repr_dim = repr_dim = pos_dim + rot_dim + 4
+        self.duet = duet
 
-        feature_dim = 35 if use_baseline_feats else 4800
+        music_feature_dim = 35 if use_baseline_feats else 4800
+        if duet:
+            # 双人模式：cond = cat([主舞动作(151), 音乐特征])
+            # 与 DuetDataset.__getitem__ 里的拼接顺序一致
+            feature_dim = music_feature_dim + repr_dim  # 4951 (jukebox) 或 186 (baseline)
+        else:
+            # 单人模式：cond = 音乐特征（原始行为，兼容预训练 checkpoint）
+            feature_dim = music_feature_dim  # 4800 (jukebox) 或 35 (baseline)
 
         horizon_seconds = 5
         FPS = 30
@@ -57,11 +66,17 @@ class EDGE:
         self.accelerator.wait_for_everyone()
 
         checkpoint = None
+        self.start_epoch = 1  # overwritten below if resuming from a checkpoint
+
         if checkpoint_path != "":
             checkpoint = torch.load(
                 checkpoint_path, map_location=self.accelerator.device
             )
             self.normalizer = checkpoint["normalizer"]
+            # Resume training from the epoch after the one that was saved
+            if "epoch" in checkpoint:
+                self.start_epoch = checkpoint["epoch"] + 1
+                print(f"[Checkpoint] Resuming from epoch {self.start_epoch}")
 
         model = DanceDecoder(
             nfeats=repr_dim,
@@ -100,12 +115,19 @@ class EDGE:
         self.optim = self.accelerator.prepare(optim)
 
         if checkpoint_path != "":
-            self.model.load_state_dict(
-                maybe_wrap(
-                    checkpoint["ema_state_dict" if EMA else "model_state_dict"],
-                    num_processes,
-                )
+            state_dict = maybe_wrap(
+                checkpoint["ema_state_dict" if EMA else "model_state_dict"],
+                num_processes,
             )
+            missing, unexpected = self.model.load_state_dict(state_dict, strict=False)
+            # strict=False allows cross-mode fine-tuning (solo → duet or duet → solo):
+            # layers whose shape changed (e.g. cond_projection when feature_dim differs)
+            # are skipped and left at their random initialization.
+            if missing or unexpected:
+                print(f"[Checkpoint] Partial load — {len(missing)} missing keys, "
+                      f"{len(unexpected)} unexpected keys.")
+                print(f"  Skipped (shape mismatch / new layers): {missing[:5]}"
+                      f"{'...' if len(missing) > 5 else ''}")
 
     def eval(self):
         self.diffusion.eval()
@@ -118,11 +140,19 @@ class EDGE:
 
     def train_loop(self, opt):
         # load datasets
+        # 根据模式选择数据集类和缓存文件名，两套互不干扰
+        if self.duet:
+            DatasetClass = DuetDataset
+            cache_prefix = "duet"
+        else:
+            DatasetClass = AISTPPDataset
+            cache_prefix = "solo"
+
         train_tensor_dataset_path = os.path.join(
-            opt.processed_data_dir, f"train_tensor_dataset.pkl"
+            opt.processed_data_dir, f"{cache_prefix}_train_tensor_dataset.pkl"
         )
         test_tensor_dataset_path = os.path.join(
-            opt.processed_data_dir, f"test_tensor_dataset.pkl"
+            opt.processed_data_dir, f"{cache_prefix}_test_tensor_dataset.pkl"
         )
         if (
             not opt.no_cache
@@ -132,20 +162,19 @@ class EDGE:
             train_dataset = pickle.load(open(train_tensor_dataset_path, "rb"))
             test_dataset = pickle.load(open(test_tensor_dataset_path, "rb"))
         else:
-            train_dataset = AISTPPDataset(
+            train_dataset = DatasetClass(
                 data_path=opt.data_path,
                 backup_path=opt.processed_data_dir,
                 train=True,
                 force_reload=opt.force_reload,
             )
-            test_dataset = AISTPPDataset(
+            test_dataset = DatasetClass(
                 data_path=opt.data_path,
                 backup_path=opt.processed_data_dir,
                 train=False,
                 normalizer=train_dataset.normalizer,
                 force_reload=opt.force_reload,
             )
-            # cache the dataset in case
             if self.accelerator.is_main_process:
                 pickle.dump(train_dataset, open(train_tensor_dataset_path, "wb"))
                 pickle.dump(test_dataset, open(test_tensor_dataset_path, "wb"))
@@ -190,7 +219,7 @@ class EDGE:
             wdir.mkdir(parents=True, exist_ok=True)
 
         self.accelerator.wait_for_everyone()
-        for epoch in range(1, opt.epochs + 1):
+        for epoch in range(self.start_epoch, opt.epochs + 1):
             avg_loss = 0
             avg_vloss = 0
             avg_fkloss = 0
@@ -238,6 +267,7 @@ class EDGE:
                     }
                     wandb.log(log_dict)
                     ckpt = {
+                        "epoch": epoch,   # saved so training can resume from here
                         "ema_state_dict": self.diffusion.master_model.state_dict(),
                         "model_state_dict": self.accelerator.unwrap_model(
                             self.model
@@ -263,6 +293,24 @@ class EDGE:
                         sound=True,
                     )
                     print(f"[MODEL SAVED at Epoch {epoch}]")
+                    self.train()
+
+            # Save latest.pt more frequently so preempted jobs lose at most
+            # save_latest_interval epochs. Overwrites the same file every time.
+            if (epoch % opt.save_latest_interval) == 0:
+                self.accelerator.wait_for_everyone()
+                if self.accelerator.is_main_process:
+                    latest_ckpt = {
+                        "epoch": epoch,
+                        "ema_state_dict": self.diffusion.master_model.state_dict(),
+                        "model_state_dict": self.accelerator.unwrap_model(
+                            self.model
+                        ).state_dict(),
+                        "optimizer_state_dict": self.optim.state_dict(),
+                        "normalizer": self.normalizer,
+                    }
+                    torch.save(latest_ckpt, os.path.join(wdir, "latest.pt"))
+
         if self.accelerator.is_main_process:
             wandb.run.finish()
 
