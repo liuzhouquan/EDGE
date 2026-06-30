@@ -42,12 +42,28 @@ class EDGE:
         duet=False,
         guidance_weight_music=2,
         guidance_weight_lead=None,
+        contact_weight=10.942,
     ):
         ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
         self.accelerator = Accelerator(kwargs_handlers=[ddp_kwargs])
         state = AcceleratorState()
         num_processes = state.num_processes
         use_baseline_feats = feature_type == "baseline"
+
+        # Fail fast if we landed on CPU. A silent CPU fallback runs ~180x slower
+        # (~95 s/batch vs ~0.5 s/batch on an H200) and wastes the whole walltime
+        # before producing any checkpoint. Set EDGE_ALLOW_CPU=1 to override.
+        dev = self.accelerator.device
+        print(f"[Device] accelerator.device={dev}  "
+              f"cuda_available={torch.cuda.is_available()}  "
+              f"CUDA_VISIBLE_DEVICES={os.environ.get('CUDA_VISIBLE_DEVICES')}",
+              flush=True)
+        if dev.type != "cuda" and os.environ.get("EDGE_ALLOW_CPU") != "1":
+            raise RuntimeError(
+                f"Training device is {dev}, not CUDA. Refusing to train on CPU "
+                f"(set EDGE_ALLOW_CPU=1 to override). "
+                f"cuda_available={torch.cuda.is_available()}"
+            )
 
         pos_dim = 3
         rot_dim = 24 * 6  # 24 joints, 6dof
@@ -109,6 +125,7 @@ class EDGE:
             cond_drop_prob=0.25,
             guidance_weight=guidance_weight_music,
             guidance_weight_lead=guidance_weight_lead,
+            contact_weight=contact_weight,
         )
 
         print(
@@ -207,7 +224,11 @@ class EDGE:
             shuffle=True,
             num_workers=0,
             pin_memory=pin,
-            drop_last=True,
+            # drop_last=False: the duet val/monitor set is tiny (~93 slices). With
+            # drop_last=True and batch_size >= 93 it yields 0 batches, making the
+            # epoch-`save_interval` `val_loss /= len(test_data_loader)` divide by
+            # zero. Keep the final partial batch so validation always has >=1 batch.
+            drop_last=False,
         )
 
         train_data_loader = self.accelerator.prepare(train_data_loader)

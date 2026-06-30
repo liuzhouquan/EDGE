@@ -3,7 +3,12 @@ from EDGE import EDGE
 
 
 def train(opt):
-    model = EDGE(opt.feature_type, learning_rate=opt.learning_rate, duet=opt.duet)
+    model = EDGE(
+        opt.feature_type,
+        learning_rate=opt.learning_rate,
+        duet=opt.duet,
+        contact_weight=getattr(opt, "contact_weight", 10.942),
+    )
     model.train_loop(opt)
 
 

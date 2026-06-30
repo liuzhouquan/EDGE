@@ -64,7 +64,20 @@ def parse_train_opt():
             "使模型学会 (music, ∅) 条件下的生成（无主舞推理，退化为单人模式）。建议值 0.1~0.2。"
         ),
     )
+    parser.add_argument(
+        "--contact_weight", type=float, default=10.942,
+        help=(
+            "Contact Consistency Loss (CCL / foot-skate loss) 的权重。"
+            "默认 10.942（EDGE 原值）。消融实验设为 0 可关闭 CCL。"
+        ),
+    )
+    parser.add_argument(
+        "--no_ccl", action="store_true",
+        help="消融开关：等价于 --contact_weight 0，关闭 Contact Consistency Loss。",
+    )
     opt = parser.parse_args()
+    if opt.no_ccl:
+        opt.contact_weight = 0.0
     return opt
 
 

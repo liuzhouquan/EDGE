@@ -56,6 +56,7 @@ class GaussianDiffusion(nn.Module):
         guidance_weight_lead=None,
         use_p2=False,
         cond_drop_prob=0.2,
+        contact_weight=10.942,
     ):
         super().__init__()
         self.horizon = horizon
@@ -65,6 +66,9 @@ class GaussianDiffusion(nn.Module):
         self.master_model = copy.deepcopy(self.model)
 
         self.cond_drop_prob = cond_drop_prob
+        # Weight of the Contact Consistency Loss (CCL / foot-skate term). Default
+        # 10.942 (EDGE original). Set to 0 to ablate CCL.
+        self.contact_weight = contact_weight
 
         # make a SMPL instance for FK module
         self.smpl = smpl
@@ -532,7 +536,7 @@ class GaussianDiffusion(nn.Module):
             0.636 * loss.mean(),
             2.964 * v_loss.mean(),
             0.646 * fk_loss.mean(),
-            10.942 * foot_loss.mean(),
+            self.contact_weight * foot_loss.mean(),
         )
         return sum(losses), losses
 
